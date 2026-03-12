@@ -7,4 +7,4 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 python-jose[cryptography]==3.3.0
 httpx==0.28.1
-python-telegram-bot[job-scheduler]==21.10
+python-telegram-bot[job-queue]==21.10
