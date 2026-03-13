@@ -707,19 +707,23 @@ async def post_init(application: Application):
     except Exception as e:
         logger.error("Failed to set bot commands: %s", e)
 
-    # Seed default broadcasts if fewer than 2 exist so /latest always has content
+    # Seed default broadcasts by source URL so they're added even on existing installs
     existing = get_broadcasts()
-    if len(existing) < 2:
-        seeds = [
-            (SEED_BROADCAST, "https://www.moh.gov.sg/newsroom/new-requirements-for-integrated-shield-plan-riders-to-strengthen-sustainability-of-private-health-insurance-and-address-rising-healthcare-costs/"),
-            (SEED_BROADCAST_2, "https://www.cpf.gov.sg/member/healthcare-financing/medishield-life"),
-        ]
-        for seed_msg, seed_url in seeds[len(existing):]:
+    existing_urls = {b.get("source_url", "") for b in existing}
+    seeds = [
+        (SEED_BROADCAST, "https://www.moh.gov.sg/newsroom/new-requirements-for-integrated-shield-plan-riders-to-strengthen-sustainability-of-private-health-insurance-and-address-rising-healthcare-costs/"),
+        (SEED_BROADCAST_2, "https://www.cpf.gov.sg/member/healthcare-financing/medishield-life"),
+    ]
+    added = 0
+    for seed_msg, seed_url in seeds:
+        if seed_url not in existing_urls:
             msg = seed_msg
             if AGENT_SIGNOFF:
                 msg += f"\n\n{AGENT_SIGNOFF}"
             save_broadcast(msg, sent_to=0, source_url=seed_url)
-        logger.info("Seeded %d broadcast(s)", 2 - len(existing))
+            added += 1
+    if added:
+        logger.info("Seeded %d new broadcast(s)", added)
 
     for hour, minute in DIGEST_TIMES:
         t = dt_time(hour=hour, minute=minute, tzinfo=SGT)
