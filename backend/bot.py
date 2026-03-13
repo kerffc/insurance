@@ -17,6 +17,7 @@ Client commands:
 - /stop — unsubscribe
 """
 
+import asyncio
 import io
 import logging
 import os
@@ -205,7 +206,7 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
             if AGENT_SIGNOFF:
                 summary += f"\n\n{AGENT_SIGNOFF}"
 
-            image_bytes = fetch_diagram_image(summary)
+            image_bytes = await asyncio.to_thread(fetch_diagram_image, summary)
 
             sent_count, failed_count = await _broadcast_to_subscribers(
                 context.bot, summary, subscribers, image_bytes
@@ -417,7 +418,7 @@ async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"Broadcasting to {len(subscribers)} subscribers...")
 
-    image_bytes = fetch_diagram_image(message)
+    image_bytes = await asyncio.to_thread(fetch_diagram_image, message)
     logger.info("Diagram image: %s bytes", len(image_bytes) if image_bytes else "None")
     sent_count, failed_count = await _broadcast_to_subscribers(context.bot, message, subscribers, image_bytes)
 
@@ -454,7 +455,7 @@ async def handle_review_callback(update: Update, context: ContextTypes.DEFAULT_T
         message = pending["message"]
         await query.message.reply_text(f"Broadcasting to {len(subscribers)} subscribers...")
 
-        image_bytes = fetch_diagram_image(message)
+        image_bytes = await asyncio.to_thread(fetch_diagram_image, message)
         sent_count, failed_count = await _broadcast_to_subscribers(context.bot, message, subscribers, image_bytes)
 
         save_broadcast(message, sent_to=sent_count, source_url=pending.get("source_url", ""))
