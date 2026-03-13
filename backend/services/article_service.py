@@ -69,7 +69,15 @@ def summarise_article(article_text: str, agent_notes: str = "") -> str:
 
 ADVISE_SYSTEM = """You are a Singapore insurance advisor's assistant. A client has shared their current policy details.
 Based on the recent updates below, give them clear, personal advice on what (if anything) has changed for them.
-Be specific. If nothing applies to their policy, say so clearly. Under 150 words. End with "Message me if you have questions!" """
+
+Format rules (strictly follow):
+- Plain text only — no markdown, no **bold**, no # headers
+- Use plain section headers on their own line, e.g. "Good News" or "What To Do"
+- Use bullet points (•) within sections
+- Be specific to their insurer and policy type
+- If nothing applies, say so clearly
+- Under 150 words
+- End with: "Message me if you have questions!" """
 
 
 def advise_for_policy(insurer: str, policy_type: str, plan_name: str | None, recent_updates: list[str]) -> str:
