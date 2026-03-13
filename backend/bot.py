@@ -41,7 +41,7 @@ from telegram.ext import (
 )
 
 from services.storage_service import ensure_dirs, save_user_policy, get_user_policy, get_all_user_policies
-from services.article_service import summarise_from_url, summarise_article, fetch_article_text, advise_for_policy, fetch_diagram_image
+from services.article_service import summarise_from_url, summarise_article, fetch_article_text, advise_for_policy, fetch_diagram_image, answer_question
 from services.news_service import fetch_new_articles
 from services.subscriber_service import (
     add_subscriber,
@@ -814,6 +814,27 @@ async def cancel_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def handle_client_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Answer a subscriber's free-text question using recent broadcast content."""
+    chat_id = update.effective_chat.id
+    if is_admin(chat_id):
+        return  # don't intercept admin free text
+    question = update.message.text.strip()
+    if not question:
+        return
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    broadcasts = get_broadcasts()
+    if not broadcasts:
+        await update.message.reply_text(
+            "I don't have any updates yet — check back after the next broadcast!\n\nType /latest to see if there's anything new.",
+            reply_markup=_client_keyboard(),
+        )
+        return
+    recent = [b["full_message"] for b in broadcasts[-5:]]
+    answer = answer_question(question, recent)
+    await update.message.reply_text(answer, reply_markup=_client_keyboard())
+
+
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN env var is required")
@@ -875,6 +896,8 @@ def main():
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CallbackQueryHandler(handle_nav_callback, pattern=r"^nav_"))
+    # Catch-all: client free-text questions — must be registered last
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_client_question))
 
     logger.info("Bot starting... Daily digest at %02d:%02d SGT", DAILY_HOUR, DAILY_MINUTE)
     app.run_polling()

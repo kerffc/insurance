@@ -120,6 +120,30 @@ def advise_for_policy(insurer: str, policy_type: str, plan_name: str | None, rec
     return response.content[0].text.strip()
 
 
+ANSWER_SYSTEM = """You are a Singapore insurance advisor's assistant. A client has asked a question.
+Answer using ONLY the recent insurance updates provided below.
+
+Rules:
+- Plain text only — no markdown, no **bold**, no # headers
+- Use • for bullet points if listing items
+- If the answer is in the updates, give a clear specific answer with relevant numbers/dates
+- If not covered, say so honestly and suggest they contact the advisor directly
+- Under 150 words
+- End with: "Message me if you have questions!" """
+
+
+def answer_question(question: str, recent_updates: list[str]) -> str:
+    """Answer a client's question using recent broadcast content as context."""
+    updates_text = "\n---\n".join(recent_updates) if recent_updates else "No recent updates."
+    response = anthropic_create(
+        model=HAIKU_MODEL,
+        max_tokens=600,
+        system=ANSWER_SYSTEM,
+        messages=[{"role": "user", "content": f"Recent updates:\n{updates_text}\n\nClient question: {question}"}],
+    )
+    return response.content[0].text.strip()
+
+
 IMAGE_PROMPT_SYSTEM = """You are a visual designer. Given an insurance news summary, write a short prompt for a whiteboard-style diagram that illustrates the key concept.
 
 Rules:
