@@ -897,7 +897,7 @@ def main():
     # Catch-all: client free-text questions — must be registered last
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_client_question))
 
-    logger.info("Bot starting... Daily digest at %02d:%02d SGT", DAILY_HOUR, DAILY_MINUTE)
+    logger.info("Bot starting... Digests at %s SGT", ", ".join(f"{h:02d}:{m:02d}" for h, m in DIGEST_TIMES))
     app.run_polling()
 
 
