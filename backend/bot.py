@@ -61,9 +61,18 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ADMIN_CHAT_IDS = [
     int(x.strip()) for x in os.environ.get("ADMIN_CHAT_IDS", "").split(",") if x.strip()
 ]
-# Daily digest time in SGT (UTC+8), default 9:00 AM
-DAILY_HOUR = int(os.environ.get("DAILY_HOUR", "9"))
-DAILY_MINUTE = int(os.environ.get("DAILY_MINUTE", "0"))
+# Daily digest schedule in SGT (UTC+8) — comma-separated HH:MM times
+# Falls back to legacy DAILY_HOUR / DAILY_MINUTE if DIGEST_TIMES not set
+_DIGEST_TIMES_RAW = os.environ.get("DIGEST_TIMES", "")
+DIGEST_TIMES: list[tuple[int, int]] = []
+for _t in _DIGEST_TIMES_RAW.split(","):
+    _t = _t.strip()
+    if _t:
+        _h, _m = _t.split(":")
+        DIGEST_TIMES.append((int(_h), int(_m)))
+if not DIGEST_TIMES:
+    # Legacy single-time fallback
+    DIGEST_TIMES = [(int(os.environ.get("DAILY_HOUR", "9")), int(os.environ.get("DAILY_MINUTE", "0")))]
 
 # Agent sign-off (appended to every broadcast)
 AGENT_SIGNOFF = os.environ.get("AGENT_SIGNOFF", "")
@@ -196,13 +205,8 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
     # Fetch new relevant articles
     articles = await asyncio.to_thread(fetch_new_articles)
     if not articles:
-        logger.info("No new relevant articles found today.")
-        for admin_id in ADMIN_CHAT_IDS:
-            try:
-                await context.bot.send_message(admin_id, "Daily digest: No new insurance news today.")
-            except Exception:
-                pass
-        return
+        logger.info("Daily digest: no new relevant articles this run.")
+        return  # No admin notification — this runs 3× per day, silence is fine
 
     logger.info("Found %d new relevant articles", len(articles))
 
@@ -673,17 +677,19 @@ async def post_init(application: Application):
         save_broadcast(msg, sent_to=0, source_url="https://www.moh.gov.sg/newsroom/new-requirements-for-integrated-shield-plan-riders-to-strengthen-sustainability-of-private-health-insurance-and-address-rising-healthcare-costs/")
         logger.info("Seeded initial broadcast (IP rider changes April 2026)")
 
-    digest_time = dt_time(hour=DAILY_HOUR, minute=DAILY_MINUTE, tzinfo=SGT)
-    application.job_queue.run_daily(daily_digest, time=digest_time, name="daily_digest")
-    logger.info("Daily digest scheduled for %02d:%02d SGT", DAILY_HOUR, DAILY_MINUTE)
+    for hour, minute in DIGEST_TIMES:
+        t = dt_time(hour=hour, minute=minute, tzinfo=SGT)
+        application.job_queue.run_daily(daily_digest, time=t, name=f"daily_digest_{hour:02d}{minute:02d}")
+    times_str = ", ".join(f"{h:02d}:{m:02d}" for h, m in DIGEST_TIMES)
+    logger.info("Daily digests scheduled at: %s SGT", times_str)
 
-    # Notify admins that bot started and digest is scheduled
+    # Notify admins that bot started and digests are scheduled
     subs = get_active_subscribers()
     for admin_id in ADMIN_CHAT_IDS:
         try:
             await application.bot.send_message(
                 admin_id,
-                f"Bot started. Daily digest scheduled for {DAILY_HOUR:02d}:{DAILY_MINUTE:02d} SGT.\n"
+                f"Bot started. Digests scheduled at {times_str} SGT.\n"
                 f"Active subscribers: {len(subs)}",
             )
         except Exception as e:

@@ -7,7 +7,7 @@ Two components:
 
 ### Primary Interface: Telegram Bot
 The main user-facing interface is a Telegram bot that:
-1. **Daily auto-digest**: Fetches SG insurance news from Google News RSS at 9am SGT, uses Claude to filter relevant articles, summarises them into structured WhatsApp-style updates, broadcasts to all subscribers
+1. **Daily auto-digest**: Fetches SG insurance news from Google News RSS at 9am, 12pm, and 4pm SGT (configurable via `DIGEST_TIMES`), uses Claude to filter relevant articles, summarises them into structured WhatsApp-style updates, broadcasts to all subscribers. Deduplication ensures the same article is never sent twice.
 2. **Manual broadcasts**: Agent uses /summarise <url> to generate + broadcast updates from specific articles
 3. **Subscriber management**: Clients /start to subscribe, /stop to unsubscribe
 
@@ -74,8 +74,7 @@ JWT_SECRET=              # required for web API
 TELEGRAM_BOT_TOKEN=      # from @BotFather
 ADMIN_CHAT_IDS=          # comma-separated TG chat IDs of admins
 AGENT_SIGNOFF=           # appended to every broadcast, e.g. "Claire Ong"
-DAILY_HOUR=9             # daily digest hour in SGT (0-23)
-DAILY_MINUTE=0
+DIGEST_TIMES=09:00,12:00,16:00  # comma-separated HH:MM times in SGT for daily digests
 ALLOWED_ORIGINS=http://localhost:3000
 ```
 
