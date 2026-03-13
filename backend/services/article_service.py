@@ -171,10 +171,21 @@ def fetch_diagram_image(summary: str) -> bytes | None:
         prompt = generate_diagram_prompt(summary)
         logger.info("Diagram prompt: %s", prompt)
         encoded = urllib.parse.quote(prompt, safe="")
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width=800&height=500&model=flux&nologo=true"
-        resp = httpx.get(url, timeout=60, follow_redirects=True)
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width=800&height=500&model=flux&seed=42&nologo=true"
+        logger.info("Fetching diagram from Pollinations.ai...")
+        resp = httpx.get(url, timeout=90, follow_redirects=True)
         resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+        logger.info("Pollinations response: status=%s content-type=%s size=%d bytes",
+                    resp.status_code, content_type, len(resp.content))
+        if not content_type.startswith("image/"):
+            logger.warning("Pollinations returned non-image content-type: %s (first 200 chars: %s)",
+                           content_type, resp.text[:200])
+            return None
         return resp.content
+    except httpx.TimeoutException:
+        logger.warning("Pollinations.ai timed out after 90s — skipping image")
+        return None
     except Exception as e:
         logger.warning("Failed to generate diagram image: %s", e)
         return None

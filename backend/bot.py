@@ -170,13 +170,12 @@ async def _broadcast_to_subscribers(bot, message: str, subscribers: list[dict], 
         try:
             if image_bytes:
                 try:
-                    await bot.send_photo(
-                        chat_id=sub["chat_id"],
-                        photo=io.BytesIO(image_bytes),
-                        filename="diagram.jpg",
-                    )
+                    buf = io.BytesIO(image_bytes)
+                    buf.name = "diagram.jpg"
+                    await bot.send_photo(chat_id=sub["chat_id"], photo=buf)
+                    logger.info("Photo sent OK to %s (%d bytes)", sub["chat_id"], len(image_bytes))
                 except Exception as img_err:
-                    logger.warning("Photo send failed for %s: %s", sub["chat_id"], img_err)
+                    logger.error("Photo send FAILED for %s: %s", sub["chat_id"], img_err)
             for chunk in _split_message(message):
                 await bot.send_message(chat_id=sub["chat_id"], text=chunk)
             sent_count += 1
@@ -470,6 +469,7 @@ async def handle_review_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.message.reply_text(f"Broadcasting to {len(subscribers)} subscribers...")
 
         image_bytes = await asyncio.to_thread(fetch_diagram_image, message)
+        logger.info("Diagram image (review callback): %s bytes", len(image_bytes) if image_bytes else "None")
         sent_count, failed_count = await _broadcast_to_subscribers(context.bot, message, subscribers, image_bytes)
 
         save_broadcast(message, sent_to=sent_count, source_url=pending.get("source_url", ""))
@@ -580,6 +580,29 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"  {preview}...")
 
     await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_testimage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: test the Pollinations.ai image pipeline without broadcasting."""
+    if not is_admin(update.effective_chat.id):
+        await update.message.reply_text("Admin only.")
+        return
+
+    await update.message.reply_text("Generating test diagram...")
+    test_summary = (
+        "From April 2026, new IP riders will no longer cover the minimum deductible. "
+        "Co-payment cap rises from $3,000 to $6,000/year. Premiums drop ~30%."
+    )
+    try:
+        image_bytes = await asyncio.to_thread(fetch_diagram_image, test_summary)
+        if image_bytes:
+            buf = io.BytesIO(image_bytes)
+            buf.name = "diagram.jpg"
+            await update.message.reply_photo(photo=buf, caption=f"Test diagram ({len(image_bytes)} bytes)")
+        else:
+            await update.message.reply_text("fetch_diagram_image returned None — check Railway logs for details.")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 
 async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -890,6 +913,7 @@ def main():
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("latest", cmd_latest))
     app.add_handler(CommandHandler("daily", cmd_daily))
+    app.add_handler(CommandHandler("testimage", cmd_testimage))
     app.add_handler(CommandHandler("subscribers", cmd_subscribers))
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("help", cmd_help))
