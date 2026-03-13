@@ -80,6 +80,19 @@ def is_admin(chat_id: int) -> bool:
     return chat_id in ADMIN_CHAT_IDS
 
 
+def _client_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("📰 Latest Updates", callback_data="nav_latest"),
+        InlineKeyboardButton("🚫 Unsubscribe", callback_data="nav_stop"),
+    ]])
+
+
+def _unsubscribed_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("▶️ Subscribe", callback_data="nav_start"),
+    ]])
+
+
 def _review_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("📢 Broadcast", callback_data="review_broadcast"),
@@ -174,19 +187,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_new:
         await update.message.reply_text(
-            f"Hi {user.first_name}! You're now subscribed to daily insurance updates.\n\n"
-            "You'll receive:\n"
-            "• Daily summaries of Singapore insurance news\n"
-            "• Policy change alerts\n"
-            "• Regulatory updates (MAS, MOH)\n"
-            "• Actionable advice from your insurance advisor\n\n"
-            "Use /stop to unsubscribe anytime."
+            f"Hi {user.first_name}! You're now subscribed to daily insurance updates.",
+            reply_markup=_client_keyboard(),
         )
     else:
         await update.message.reply_text(
-            f"Hi {user.first_name}! You're already subscribed.\n"
-            "You'll continue receiving daily updates.\n\n"
-            "Use /stop to unsubscribe."
+            f"Hi {user.first_name}! You're already subscribed.",
+            reply_markup=_client_keyboard(),
         )
 
 
@@ -195,9 +202,9 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     removed = remove_subscriber(chat_id)
     if removed:
-        await update.message.reply_text("You've been unsubscribed. Use /start to resubscribe anytime.")
+        await update.message.reply_text("You've been unsubscribed.", reply_markup=_unsubscribed_keyboard())
     else:
-        await update.message.reply_text("You weren't subscribed. Use /start to subscribe.")
+        await update.message.reply_text("You weren't subscribed.", reply_markup=_unsubscribed_keyboard())
 
 
 # ── Admin commands ───────────────────────────────────────────────────────────
@@ -404,6 +411,48 @@ async def handle_review_callback(update: Update, context: ContextTypes.DEFAULT_T
     return REVIEW_MESSAGE
 
 
+async def handle_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle navigation button taps (Latest / Subscribe / Unsubscribe)."""
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+    user = query.from_user
+
+    if query.data == "nav_latest":
+        broadcasts = get_broadcasts()
+        if not broadcasts:
+            await query.message.reply_text("No updates yet. Check back later!")
+            return
+        recent = broadcasts[-3:]
+        recent.reverse()
+        for b in recent:
+            text = b["full_message"]
+            if b.get("source_url"):
+                text += f"\n\n{b['source_url']}"
+            while len(text) > 4096:
+                split_at = text.rfind("\n", 0, 4096)
+                if split_at == -1:
+                    split_at = 4096
+                await query.message.reply_text(text[:split_at])
+                text = text[split_at:].lstrip("\n")
+            if text:
+                await query.message.reply_text(text)
+
+    elif query.data == "nav_stop":
+        removed = remove_subscriber(chat_id)
+        if removed:
+            await query.message.reply_text("You've been unsubscribed.", reply_markup=_unsubscribed_keyboard())
+        else:
+            await query.message.reply_text("You weren't subscribed.", reply_markup=_unsubscribed_keyboard())
+
+    elif query.data == "nav_start":
+        is_new = add_subscriber(chat_id, first_name=user.first_name or "", username=user.username or "")
+        if is_new:
+            await query.message.reply_text("You're now subscribed to daily insurance updates!", reply_markup=_client_keyboard())
+        else:
+            await query.message.reply_text("You're already subscribed!", reply_markup=_client_keyboard())
+
+
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manually trigger daily digest (admin, for testing)."""
     if not is_admin(update.effective_chat.id):
@@ -492,73 +541,39 @@ async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    recent = broadcasts[-5:]  # last 5
+    recent = broadcasts[-3:]  # last 3
     recent.reverse()  # newest first
 
-    buttons = []
     for b in recent:
-        date = b["sent_at"][:10]
-        preview = b["full_message"].split("\n")[0][:40]
-        buttons.append([InlineKeyboardButton(
-            f"{date} — {preview}...",
-            callback_data=f"read_{b['id']}"
-        )])
+        text = b["full_message"]
+        if b.get("source_url"):
+            text += f"\n\n{b['source_url']}"
+        while len(text) > 4096:
+            split_at = text.rfind("\n", 0, 4096)
+            if split_at == -1:
+                split_at = 4096
+            await update.message.reply_text(text[:split_at])
+            text = text[split_at:].lstrip("\n")
+        if text:
+            await update.message.reply_text(text)
 
-    await update.message.reply_text(
-        "Latest updates — tap to read:",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
-
-async def handle_read_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send full broadcast message when user taps a button."""
-    query = update.callback_query
-    await query.answer()
-
-    if not query.data.startswith("read_"):
-        return
-
-    broadcast_id = int(query.data.replace("read_", ""))
-    broadcasts = get_broadcasts()
-    broadcast = next((b for b in broadcasts if b["id"] == broadcast_id), None)
-
-    if not broadcast:
-        await query.message.reply_text("Update not found.")
-        return
-
-    text = broadcast["full_message"]
-    # Telegram has a 4096-char message limit; split if needed
-    while len(text) > 4096:
-        # Try to split at a newline near the limit
-        split_at = text.rfind("\n", 0, 4096)
-        if split_at == -1:
-            split_at = 4096
-        await query.message.reply_text(text[:split_at])
-        text = text[split_at:].lstrip("\n")
-    if text:
-        await query.message.reply_text(text)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show help."""
     is_adm = is_admin(update.effective_chat.id)
-    text = (
-        "Insurance Update Bot\n\n"
-        "/start — Subscribe to daily insurance updates\n"
-        "/stop — Unsubscribe\n"
-        "/latest — Read recent updates\n"
-        "/help — Show this help\n"
-    )
     if is_adm:
-        text += (
-            "\nAdmin Commands:\n"
+        text = (
+            "Admin Commands:\n"
             "/summarise <url> [notes] — Summarise article + broadcast\n"
             "/paste <text> — Summarise pasted text + broadcast\n"
             "/daily — Trigger daily digest now\n"
             "/subscribers — List subscribers\n"
             "/history — Broadcast history\n"
         )
-    await update.message.reply_text(text)
+        await update.message.reply_text(text, reply_markup=_client_keyboard())
+    else:
+        await update.message.reply_text("What would you like to do?", reply_markup=_client_keyboard())
 
 
 SEED_BROADCAST = """Hi valued clients, here's a quick update on IP rider changes effective 1 April 2026!
@@ -690,7 +705,7 @@ def main():
     app.add_handler(CommandHandler("subscribers", cmd_subscribers))
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CallbackQueryHandler(handle_read_callback, pattern=r"^read_\d+$"))
+    app.add_handler(CallbackQueryHandler(handle_nav_callback, pattern=r"^nav_"))
 
     logger.info("Bot starting... Daily digest at %02d:%02d SGT", DAILY_HOUR, DAILY_MINUTE)
     app.run_polling()
