@@ -104,6 +104,7 @@ def fetch_new_articles() -> list[dict]:
 
     for source in NEWS_SOURCES:
         articles = fetch_rss_articles(source)
+        logger.info("RSS %s → %d articles", source.split("q=")[1].split("&")[0], len(articles))
         for a in articles:
             if a["url"] not in seen:
                 all_articles.append(a)
@@ -128,4 +129,6 @@ def fetch_new_articles() -> list[dict]:
     if new_urls:
         mark_urls_seen(new_urls)
 
+    logger.info("Daily digest: %d total unseen, %d candidates checked, %d relevant",
+                len(unique), len(candidates), len(relevant))
     return relevant
