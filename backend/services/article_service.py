@@ -2,6 +2,7 @@
 
 import logging
 import re
+import urllib.parse
 
 import httpx
 
@@ -14,24 +15,33 @@ SUMMARISE_SYSTEM = """You are a Singapore insurance advisor's assistant. Read a 
 
 Format (follow exactly, plain text only — no markdown, no ** or #):
 
-Hi valued clients,
-[One sentence summary of the key change and its impact.]
+Hi valued clients, here's a quick update on [topic]!
 
-Here's what's changing:
+What's Changing
 • [specific change]
 • [specific change, include SGD amounts / % where relevant]
 
-What this means for you:
-• [who is affected and how]
-• [any deadlines or action needed]
+The Good News
+• [positive aspect or saving]
+• [another positive or benefit if applicable]
 
-Bottom line: [1–2 sentence plain-English summary. Warm, not alarmist. End with: "Drop me a message if you'd like to go through your plan together."]
+Your Current [Policy/Rider/Plan]
+• [scenario 1, e.g. "Bought before X date"] → [outcome]
+• [scenario 2] → [outcome]
+
+What To Do
+[1–2 sentences. Calm, actionable. No bullets here. End with: "Message me if you have questions!"]
 
 Rules:
-- Plain text only — no bold, no headers with #
-- Use • for bullets
+- Plain text only — no bold, no headers with #, no markdown
+- Use • for bullets in the first three sections
+- "What To Do" is a short paragraph, not bullets
+- Section headers are plain text on their own line (no colon)
+- Use → (arrow) for if/then scenarios in "Your Current" section
+- Include SGD amounts and % where available
 - Singapore English, professional and warm
-- Target ~150 words. Be concise."""
+- Target ~150 words. Be concise.
+- If there is no clear "Good News", skip that section and use a relevant section instead"""
 
 
 def fetch_article_text(url: str) -> str:
@@ -108,6 +118,42 @@ def advise_for_policy(insurer: str, policy_type: str, plan_name: str | None, rec
         messages=[{"role": "user", "content": user_msg}],
     )
     return response.content[0].text.strip()
+
+
+IMAGE_PROMPT_SYSTEM = """You are a visual designer. Given an insurance news summary, write a short prompt for a whiteboard-style diagram that illustrates the key concept.
+
+Rules:
+- Describe a simple diagram: Venn diagram, comparison table, flowchart, or arrow diagram
+- Style must include: "clean hand-drawn whiteboard sketch, black ink on white background, minimalist"
+- Include 2-3 key concepts or labels from the article as part of the diagram description
+- No people, no faces, no logos
+- Max 40 words total"""
+
+
+def generate_diagram_prompt(summary: str) -> str:
+    """Use Claude Haiku to generate an image generation prompt for the article."""
+    response = anthropic_create(
+        model=HAIKU_MODEL,
+        max_tokens=80,
+        system=IMAGE_PROMPT_SYSTEM,
+        messages=[{"role": "user", "content": f"Summary:\n{summary}"}],
+    )
+    return response.content[0].text.strip()
+
+
+def fetch_diagram_image(summary: str) -> bytes | None:
+    """Generate a whiteboard-style diagram image via Pollinations.ai. Returns image bytes or None."""
+    try:
+        prompt = generate_diagram_prompt(summary)
+        logger.info("Diagram prompt: %s", prompt)
+        encoded = urllib.parse.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width=800&height=500&model=flux&nologo=true"
+        resp = httpx.get(url, timeout=60, follow_redirects=True)
+        resp.raise_for_status()
+        return resp.content
+    except Exception as e:
+        logger.warning("Failed to generate diagram image: %s", e)
+        return None
 
 
 def summarise_from_url(url: str, agent_notes: str = "") -> dict:

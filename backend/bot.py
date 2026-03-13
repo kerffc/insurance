@@ -17,6 +17,7 @@ Client commands:
 - /stop — unsubscribe
 """
 
+import io
 import logging
 import os
 import re
@@ -40,7 +41,7 @@ from telegram.ext import (
 )
 
 from services.storage_service import ensure_dirs, save_user_policy, get_user_policy, get_all_user_policies
-from services.article_service import summarise_from_url, summarise_article, fetch_article_text, advise_for_policy
+from services.article_service import summarise_from_url, summarise_article, fetch_article_text, advise_for_policy, fetch_diagram_image
 from services.news_service import fetch_new_articles
 from services.subscriber_service import (
     add_subscriber,
@@ -135,6 +136,30 @@ def _plan_skip_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
+async def _broadcast_to_subscribers(bot, message: str, subscribers: list[dict], image_bytes: bytes | None = None) -> tuple[int, int]:
+    """Send message (and optional image) to all subscribers. Returns (sent_count, failed_count)."""
+    sent_count = 0
+    failed_count = 0
+    for sub in subscribers:
+        try:
+            if image_bytes:
+                await bot.send_photo(chat_id=sub["chat_id"], photo=io.BytesIO(image_bytes))
+            msg = message
+            while len(msg) > 4096:
+                split_at = msg.rfind("\n", 0, 4096)
+                if split_at == -1:
+                    split_at = 4096
+                await bot.send_message(chat_id=sub["chat_id"], text=msg[:split_at])
+                msg = msg[split_at:].lstrip("\n")
+            if msg:
+                await bot.send_message(chat_id=sub["chat_id"], text=msg)
+            sent_count += 1
+        except Exception as e:
+            logger.warning("Failed to send to %s: %s", sub["chat_id"], e)
+            failed_count += 1
+    return sent_count, failed_count
+
+
 # ── Daily digest job ─────────────────────────────────────────────────────────
 
 async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
@@ -173,22 +198,11 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
             if AGENT_SIGNOFF:
                 summary += f"\n\n{AGENT_SIGNOFF}"
 
-            sent_count = 0
-            for sub in subscribers:
-                try:
-                    # Telegram 4096-char limit — split if needed
-                    msg = summary
-                    while len(msg) > 4096:
-                        split_at = msg.rfind("\n", 0, 4096)
-                        if split_at == -1:
-                            split_at = 4096
-                        await context.bot.send_message(chat_id=sub["chat_id"], text=msg[:split_at])
-                        msg = msg[split_at:].lstrip("\n")
-                    if msg:
-                        await context.bot.send_message(chat_id=sub["chat_id"], text=msg)
-                    sent_count += 1
-                except Exception as e:
-                    logger.warning("Failed to send to %s: %s", sub["chat_id"], e)
+            image_bytes = fetch_diagram_image(summary)
+
+            sent_count, failed_count = await _broadcast_to_subscribers(
+                context.bot, summary, subscribers, image_bytes
+            )
 
             save_broadcast(summary, sent_to=sent_count, source_url=article["url"])
             logger.info("Broadcast '%s' to %d subscribers", article["title"][:50], sent_count)
@@ -393,18 +407,11 @@ async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return REVIEW_MESSAGE
 
     message = pending["message"]
-    sent_count = 0
-    failed_count = 0
 
     await update.message.reply_text(f"Broadcasting to {len(subscribers)} subscribers...")
 
-    for sub in subscribers:
-        try:
-            await context.bot.send_message(chat_id=sub["chat_id"], text=message)
-            sent_count += 1
-        except Exception as e:
-            logger.warning("Failed to send to %s: %s", sub["chat_id"], e)
-            failed_count += 1
+    image_bytes = fetch_diagram_image(message)
+    sent_count, failed_count = await _broadcast_to_subscribers(context.bot, message, subscribers, image_bytes)
 
     save_broadcast(message, sent_to=sent_count, source_url=pending.get("source_url", ""))
     _pending_messages.pop(chat_id, None)
@@ -437,17 +444,10 @@ async def handle_review_callback(update: Update, context: ContextTypes.DEFAULT_T
             return REVIEW_MESSAGE
 
         message = pending["message"]
-        sent_count = 0
-        failed_count = 0
         await query.message.reply_text(f"Broadcasting to {len(subscribers)} subscribers...")
 
-        for sub in subscribers:
-            try:
-                await context.bot.send_message(chat_id=sub["chat_id"], text=message)
-                sent_count += 1
-            except Exception as e:
-                logger.warning("Failed to send to %s: %s", sub["chat_id"], e)
-                failed_count += 1
+        image_bytes = fetch_diagram_image(message)
+        sent_count, failed_count = await _broadcast_to_subscribers(context.bot, message, subscribers, image_bytes)
 
         save_broadcast(message, sent_to=sent_count, source_url=pending.get("source_url", ""))
         _pending_messages.pop(chat_id, None)
