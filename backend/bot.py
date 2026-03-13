@@ -80,6 +80,14 @@ def is_admin(chat_id: int) -> bool:
     return chat_id in ADMIN_CHAT_IDS
 
 
+def _review_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("📢 Broadcast", callback_data="review_broadcast"),
+        InlineKeyboardButton("✏️ Edit", callback_data="review_edit"),
+        InlineKeyboardButton("❌ Cancel", callback_data="review_cancel"),
+    ]])
+
+
 # ── Daily digest job ─────────────────────────────────────────────────────────
 
 async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
@@ -219,10 +227,7 @@ async def cmd_summarise(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         _pending_messages[update.effective_chat.id] = {"message": summary, "source_url": url}
         await update.message.reply_text(summary)
-        await update.message.reply_text(
-            "---\n/broadcast — Send to all subscribers\n/edit — Replace with your own text\n"
-            "/append [text] — Add text at the end\n/cancel — Discard"
-        )
+        await update.message.reply_text("Review the message above, then choose:", reply_markup=_review_keyboard())
         return REVIEW_MESSAGE
 
     except Exception as e:
@@ -251,10 +256,7 @@ async def cmd_paste(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         _pending_messages[update.effective_chat.id] = {"message": summary, "source_url": ""}
         await update.message.reply_text(summary)
-        await update.message.reply_text(
-            "---\n/broadcast — Send to all subscribers\n/edit — Replace\n"
-            "/append [text] — Add at end\n/cancel — Discard"
-        )
+        await update.message.reply_text("Review the message above, then choose:", reply_markup=_review_keyboard())
         return REVIEW_MESSAGE
 
     except Exception as e:
@@ -284,7 +286,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _pending_messages[chat_id] = pending
             await update.message.reply_text("Updated:")
             await update.message.reply_text(pending["message"])
-            await update.message.reply_text("/broadcast, /edit, /append, or /cancel")
+            await update.message.reply_text("Review the message above, then choose:", reply_markup=_review_keyboard())
             return REVIEW_MESSAGE
         await update.message.reply_text("Usage: /append [text]")
         return REVIEW_MESSAGE
@@ -293,7 +295,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Discarded.")
         return ConversationHandler.END
     else:
-        await update.message.reply_text("/broadcast, /edit, /append [text], or /cancel")
+        await update.message.reply_text("Choose an action:", reply_markup=_review_keyboard())
         return REVIEW_MESSAGE
 
 
@@ -308,7 +310,7 @@ async def handle_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _pending_messages[chat_id] = pending
     await update.message.reply_text("Updated:")
     await update.message.reply_text(pending["message"])
-    await update.message.reply_text("/broadcast, /edit, /append, or /cancel")
+    await update.message.reply_text("Review the message above, then choose:", reply_markup=_review_keyboard())
     return REVIEW_MESSAGE
 
 
@@ -348,6 +350,58 @@ async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result += f" ({failed_count} failed)"
     await update.message.reply_text(result)
     return ConversationHandler.END
+
+
+async def handle_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle inline button taps during message review (Broadcast / Edit / Cancel)."""
+    query = update.callback_query
+    await query.answer()
+
+    chat_id = query.from_user.id
+    pending = _pending_messages.get(chat_id)
+
+    if not pending:
+        await query.message.reply_text("No pending message.")
+        return ConversationHandler.END
+
+    if query.data == "review_broadcast":
+        subscribers = get_active_subscribers()
+        if not subscribers:
+            await query.message.reply_text("No subscribers. Ask clients to /start the bot.")
+            return REVIEW_MESSAGE
+
+        message = pending["message"]
+        sent_count = 0
+        failed_count = 0
+        await query.message.reply_text(f"Broadcasting to {len(subscribers)} subscribers...")
+
+        for sub in subscribers:
+            try:
+                await context.bot.send_message(chat_id=sub["chat_id"], text=message)
+                sent_count += 1
+            except Exception as e:
+                logger.warning("Failed to send to %s: %s", sub["chat_id"], e)
+                failed_count += 1
+
+        save_broadcast(message, sent_to=sent_count, source_url=pending.get("source_url", ""))
+        _pending_messages.pop(chat_id, None)
+
+        result = f"Sent to {sent_count} subscriber(s)!"
+        if failed_count:
+            result += f" ({failed_count} failed)"
+        await query.message.reply_text(result)
+        return ConversationHandler.END
+
+    elif query.data == "review_edit":
+        await query.message.reply_text("Send me the new message text:")
+        return EDIT_MESSAGE
+
+    elif query.data == "review_cancel":
+        _pending_messages.pop(chat_id, None)
+        await query.message.reply_text("Discarded.")
+        return ConversationHandler.END
+
+    return REVIEW_MESSAGE
 
 
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -507,43 +561,26 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
-SEED_BROADCAST = """Hi valued clients, here's an important update on upcoming changes to Integrated Shield Plan (IP) riders!
+SEED_BROADCAST = """Hi valued clients, here's a quick update on IP rider changes effective 1 April 2026!
 
-1️⃣ What's Changing (Effective 1 April 2026)
+What's Changing
+• New IP riders will no longer cover the minimum IP deductible
+• Co-payment cap increases from $3,000 to $6,000/year
+• Applies to all new riders sold from 1 April 2026
 
-• New IP riders will no longer cover the minimum IP deductible — this is the first amount you pay before insurance kicks in
-• The co-payment cap is increasing from $3,000/year to $6,000/year minimum
-• These changes apply to ALL new riders sold from 1 April 2026
-
-2️⃣ Why These Changes?
-
-• MOH data shows IP policyholders with riders are 1.4x more likely to claim, with 1.4x larger average claims
-• Rising bill sizes and claims have been driving up premiums, especially for riders
-• The changes aim to make private health insurance more sustainable and affordable long-term
-
-3️⃣ Impact on Premiums
-
-• Good news — new rider premiums expected to be ~30% lower on average
-• Private hospital IP rider holders could save ~$600/year
+The Good News
+• New rider premiums expected to be ~30% lower on average
+• Private hospital rider holders could save ~$600/year
 • Public hospital rider holders could save ~$200/year
-• Older policyholders will enjoy greater premium savings
 
-4️⃣ What About Your Current Rider?
+Your Current Rider
+• Bought before 26 Nov 2025 → no change, benefits intact
+• Bought now–31 March 2026 → must switch to compliant rider at renewal after April 2028
 
-• If you bought your rider before 26 Nov 2025: Your current contract stays valid. Benefits do NOT automatically change on 1 April 2026
-• If you buy a rider between now and 31 March 2026: You'll need to switch to a new-compliant rider by your next renewal after 1 April 2028
-• Existing riders that fully cover deductibles will continue to operate as they do today
+What To Do
+Don't rush — existing coverage stays intact. Review your deductible and co-payment terms, and reach out if your rider is up for renewal soon.
 
-5️⃣ What Should You Do Now?
-
-• Don't rush to make changes — your existing coverage remains intact
-• Review your current IP and rider coverage to understand your deductible and co-payment terms
-• Consider whether the new lower-premium riders might suit your needs better
-• Reach out to discuss your specific situation — especially if your rider is up for renewal soon
-
-This is a significant shift in how IP riders work in Singapore. The key takeaway: existing policyholders are protected, and new riders will be more affordable but with higher out-of-pocket costs.
-
-Feel free to reach out if you have any questions about how this affects your specific policy!"""
+Message me if you have questions!"""
 
 
 async def post_init(application: Application):
@@ -633,6 +670,7 @@ def main():
                 CommandHandler("edit", handle_review),
                 CommandHandler("append", handle_review),
                 CommandHandler("cancel", handle_review),
+                CallbackQueryHandler(handle_review_callback, pattern=r"^review_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_review),
             ],
             EDIT_MESSAGE: [
