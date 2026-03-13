@@ -23,6 +23,12 @@ NEWS_SOURCES = [
     "https://news.google.com/rss/search?q=singapore+MAS+insurance+regulation&hl=en-SG&gl=SG&ceid=SG:en",
     "https://news.google.com/rss/search?q=singapore+health+insurance+rider+medishield&hl=en-SG&gl=SG&ceid=SG:en",
     "https://news.google.com/rss/search?q=singapore+CPF+insurance+update&hl=en-SG&gl=SG&ceid=SG:en",
+    # MOH and government policy announcements
+    "https://news.google.com/rss/search?q=MOH+singapore+integrated+shield+plan+IP+rider&hl=en-SG&gl=SG&ceid=SG:en",
+    "https://news.google.com/rss/search?q=MSF+MOH+singapore+insurance+subsidy+policy&hl=en-SG&gl=SG&ceid=SG:en",
+    # Straits Times Singapore insurance and financial policy
+    "https://news.google.com/rss/search?q=straits+times+singapore+insurance+premium+rider&hl=en-SG&gl=SG&ceid=SG:en",
+    "https://news.google.com/rss/search?q=singapore+lasting+power+attorney+LPA+CPF+insurance&hl=en-SG&gl=SG&ceid=SG:en",
 ]
 
 HEADERS = {
@@ -32,11 +38,13 @@ HEADERS = {
 RELEVANCE_SYSTEM = """You are a Singapore insurance news filter. Given an article title and snippet, \
 determine if it is RELEVANT to Singapore insurance policyholders — i.e., contains info about:
 - Insurance policy changes, premium changes, coverage changes
-- MAS / MOH regulatory updates affecting insurance
+- MAS / MOH / MSF regulatory updates affecting insurance or financial planning
 - Health insurance, IP riders, MediShield Life changes
-- CPF changes related to insurance
+- CPF changes related to insurance or retirement
 - Insurer announcements (AIA, Prudential, Great Eastern, NTUC Income, etc.)
 - Healthcare cost changes affecting insurance
+- Lasting Power of Attorney (LPA), estate planning, or government schemes that affect financial/insurance planning
+- Government subsidies or fee changes relevant to Singaporeans' financial wellbeing
 
 Reply with ONLY "YES" or "NO"."""
 
