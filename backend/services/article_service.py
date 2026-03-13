@@ -67,6 +67,30 @@ def summarise_article(article_text: str, agent_notes: str = "") -> str:
     return response.content[0].text.strip()
 
 
+ADVISE_SYSTEM = """You are a Singapore insurance advisor's assistant. A client has shared their current policy details.
+Based on the recent updates below, give them clear, personal advice on what (if anything) has changed for them.
+Be specific. If nothing applies to their policy, say so clearly. Under 150 words. End with "Message me if you have questions!" """
+
+
+def advise_for_policy(insurer: str, policy_type: str, plan_name: str | None, recent_updates: list[str]) -> str:
+    """Generate personalised advice for a client based on their policy and recent broadcasts."""
+    updates_text = "\n---\n".join(recent_updates) if recent_updates else "No recent updates available."
+    user_msg = (
+        f"Client's Policy:\n"
+        f"- Insurer: {insurer}\n"
+        f"- Policy Type: {policy_type}\n"
+        f"- Plan Name: {plan_name or 'not specified'}\n\n"
+        f"Recent Updates:\n{updates_text}"
+    )
+    response = anthropic_create(
+        model=HAIKU_MODEL,
+        max_tokens=600,
+        system=ADVISE_SYSTEM,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    return response.content[0].text.strip()
+
+
 def summarise_from_url(url: str, agent_notes: str = "") -> dict:
     """Fetch article from URL and summarise it."""
     article_text = fetch_article_text(url)

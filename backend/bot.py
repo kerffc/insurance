@@ -39,8 +39,8 @@ from telegram.ext import (
     filters,
 )
 
-from services.storage_service import ensure_dirs
-from services.article_service import summarise_from_url, summarise_article, fetch_article_text
+from services.storage_service import ensure_dirs, save_user_policy, get_user_policy
+from services.article_service import summarise_from_url, summarise_article, fetch_article_text, advise_for_policy
 from services.news_service import fetch_new_articles
 from services.subscriber_service import (
     add_subscriber,
@@ -69,11 +69,17 @@ AGENT_SIGNOFF = os.environ.get("AGENT_SIGNOFF", "")
 # SGT timezone
 SGT = timezone(timedelta(hours=8))
 
-# Conversation states
+# Conversation states — review flow
 REVIEW_MESSAGE, EDIT_MESSAGE = range(2)
+
+# Conversation states — policy advisor flow
+POLICY_INSURER, POLICY_TYPE, POLICY_PLAN = range(3)
 
 # Store pending messages per admin
 _pending_messages: dict[int, dict] = {}
+
+# Temp policy data during /mypolicy conversation
+_policy_store: dict[int, dict] = {}
 
 
 def is_admin(chat_id: int) -> bool:
@@ -98,6 +104,34 @@ def _review_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton("📢 Broadcast", callback_data="review_broadcast"),
         InlineKeyboardButton("✏️ Edit", callback_data="review_edit"),
         InlineKeyboardButton("❌ Cancel", callback_data="review_cancel"),
+    ]])
+
+
+def _insurer_keyboard() -> InlineKeyboardMarkup:
+    insurers = ["AIA", "Prudential", "Great Eastern", "NTUC Income", "Manulife", "Other"]
+    rows = []
+    for i in range(0, len(insurers), 2):
+        rows.append([
+            InlineKeyboardButton(ins, callback_data=f"policy_insurer_{ins}")
+            for ins in insurers[i:i+2]
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _policy_type_keyboard() -> InlineKeyboardMarkup:
+    types = ["Health/Medical", "Life", "Critical Illness", "Other"]
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(t, callback_data=f"policy_type_{t}")
+        for t in types[:2]
+    ], [
+        InlineKeyboardButton(t, callback_data=f"policy_type_{t}")
+        for t in types[2:]
+    ]])
+
+
+def _plan_skip_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Skip", callback_data="policy_skip"),
     ]])
 
 
@@ -453,6 +487,7 @@ async def handle_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await query.message.reply_text("You're already subscribed!", reply_markup=_client_keyboard())
 
 
+
 async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manually trigger daily digest (admin, for testing)."""
     if not is_admin(update.effective_chat.id):
@@ -605,6 +640,7 @@ async def post_init(application: Application):
             BotCommand("start", "Subscribe to daily insurance updates"),
             BotCommand("stop", "Unsubscribe from updates"),
             BotCommand("latest", "Read recent updates"),
+            BotCommand("mypolicy", "Get advice based on your policy"),
             BotCommand("help", "Show available commands"),
         ])
     except Exception as e:
@@ -655,6 +691,92 @@ def start_health_server():
     logger.info("Health check server on port %d", port)
 
 
+async def cmd_mypolicy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point for /mypolicy — shows saved policy (if any) then asks for insurer."""
+    chat_id = update.effective_chat.id
+    saved = get_user_policy(chat_id)
+    if saved:
+        plan_str = f" ({saved['plan_name']})" if saved.get("plan_name") else ""
+        await update.message.reply_text(
+            f"Your saved policy: {saved['insurer']} {saved['policy_type']}{plan_str}\n\n"
+            "Update it below, or tap your insurer to re-run advice with current details.",
+            reply_markup=_insurer_keyboard(),
+        )
+    else:
+        await update.message.reply_text("Which insurer is your policy with?", reply_markup=_insurer_keyboard())
+    return POLICY_INSURER
+
+
+async def handle_policy_insurer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Store insurer choice and ask for policy type."""
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+    insurer = query.data.replace("policy_insurer_", "", 1)
+    _policy_store[chat_id] = {"insurer": insurer}
+    await query.message.reply_text(f"Got it — {insurer}. What type of policy?", reply_markup=_policy_type_keyboard())
+    return POLICY_TYPE
+
+
+async def handle_policy_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Store policy type and ask for plan name."""
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+    policy_type = query.data.replace("policy_type_", "", 1)
+    _policy_store[chat_id]["policy_type"] = policy_type
+    await query.message.reply_text(
+        f"What's your plan name? (e.g. Paramount Plan, HealthShield Gold Max A)\n"
+        f"Or tap Skip if you're not sure.",
+        reply_markup=_plan_skip_keyboard(),
+    )
+    return POLICY_PLAN
+
+
+async def handle_policy_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the 'Skip' button on plan name step."""
+    query = update.callback_query
+    await query.answer()
+    await _generate_advice(query.from_user.id, plan_name=None, reply_func=query.message.reply_text)
+    return ConversationHandler.END
+
+
+async def handle_policy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive typed plan name and generate advice."""
+    chat_id = update.effective_chat.id
+    plan_name = update.message.text.strip()
+    await _generate_advice(chat_id, plan_name=plan_name, reply_func=update.message.reply_text)
+    return ConversationHandler.END
+
+
+async def _generate_advice(chat_id: int, plan_name: str | None, reply_func) -> None:
+    """Save policy, cross-reference broadcasts, return personalised advice."""
+    from datetime import datetime
+    store = _policy_store.pop(chat_id, {})
+    insurer = store.get("insurer", "Unknown")
+    policy_type = store.get("policy_type", "Unknown")
+
+    policy = {
+        "insurer": insurer,
+        "policy_type": policy_type,
+        "plan_name": plan_name or "",
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    save_user_policy(chat_id, policy)
+
+    await reply_func("Generating personalised advice...")
+
+    broadcasts = get_broadcasts()
+    recent_messages = [b["full_message"] for b in broadcasts[-3:]] if broadcasts else []
+
+    try:
+        advice = advise_for_policy(insurer, policy_type, plan_name, recent_messages)
+        await reply_func(advice, reply_markup=_client_keyboard())
+    except Exception as e:
+        logger.error("advise_for_policy failed: %s", e)
+        await reply_func("Sorry, couldn't generate advice right now. Try again later.")
+
+
 async def cancel_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel and end the conversation properly."""
     chat_id = update.effective_chat.id
@@ -697,7 +819,25 @@ def main():
         ],
     )
 
+    policy_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("mypolicy", cmd_mypolicy)],
+        states={
+            POLICY_INSURER: [
+                CallbackQueryHandler(handle_policy_insurer, pattern=r"^policy_insurer_"),
+            ],
+            POLICY_TYPE: [
+                CallbackQueryHandler(handle_policy_type, pattern=r"^policy_type_"),
+            ],
+            POLICY_PLAN: [
+                CallbackQueryHandler(handle_policy_plan_callback, pattern=r"^policy_skip$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_policy_plan),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_fallback)],
+    )
+
     app.add_handler(conv_handler)
+    app.add_handler(policy_conv_handler)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("latest", cmd_latest))

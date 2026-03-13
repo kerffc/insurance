@@ -7,6 +7,8 @@ import threading
 
 from config import DATA_DIR, USERS_FILE, POLICY_CHANGES_FILE, SESSIONS_DIR
 
+USER_POLICIES_FILE = os.path.join(DATA_DIR, "user_policies.json")
+
 logger = logging.getLogger(__name__)
 
 _locks: dict[str, threading.Lock] = {}
@@ -71,6 +73,21 @@ def read_session(session_id: str) -> dict | None:
 
 def write_session(session_id: str, data: dict) -> None:
     write_json(session_path(session_id), data)
+
+
+def save_user_policy(chat_id: int, policy: dict) -> None:
+    data = read_json(USER_POLICIES_FILE)
+    if not isinstance(data, dict):
+        data = {}
+    data[str(chat_id)] = policy
+    write_json(USER_POLICIES_FILE, data)
+
+
+def get_user_policy(chat_id: int) -> dict | None:
+    data = read_json(USER_POLICIES_FILE)
+    if not isinstance(data, dict):
+        return None
+    return data.get(str(chat_id))
 
 
 def list_sessions() -> list[dict]:
