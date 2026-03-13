@@ -39,7 +39,7 @@ from telegram.ext import (
     filters,
 )
 
-from services.storage_service import ensure_dirs, save_user_policy, get_user_policy
+from services.storage_service import ensure_dirs, save_user_policy, get_user_policy, get_all_user_policies
 from services.article_service import summarise_from_url, summarise_article, fetch_article_text, advise_for_policy
 from services.news_service import fetch_new_articles
 from services.subscriber_service import (
@@ -192,6 +192,8 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
 
             save_broadcast(summary, sent_to=sent_count, source_url=article["url"])
             logger.info("Broadcast '%s' to %d subscribers", article["title"][:50], sent_count)
+
+            await _send_personalised_followups(context.bot, summary, subscribers)
 
             for admin_id in ADMIN_CHAT_IDS:
                 try:
@@ -355,6 +357,27 @@ async def handle_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return REVIEW_MESSAGE
 
 
+async def _send_personalised_followups(bot, broadcast_message: str, subscribers: list[dict]) -> None:
+    """Send personalised 🔍 follow-ups to subscribers who have a saved policy."""
+    policies = get_all_user_policies()
+    if not policies:
+        return
+    sub_ids = {str(s["chat_id"]) for s in subscribers}
+    for chat_id_str, policy in policies.items():
+        if chat_id_str not in sub_ids:
+            continue
+        try:
+            advice = advise_for_policy(
+                policy["insurer"],
+                policy["policy_type"],
+                policy.get("plan_name") or None,
+                [broadcast_message],
+            )
+            await bot.send_message(chat_id=int(chat_id_str), text=f"🔍\n\n{advice}")
+        except Exception as e:
+            logger.warning("Personalised follow-up failed for %s: %s", chat_id_str, e)
+
+
 async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Broadcast pending message to all subscribers."""
     chat_id = update.effective_chat.id
@@ -390,6 +413,8 @@ async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if failed_count:
         result += f" ({failed_count} failed)"
     await update.message.reply_text(result)
+
+    await _send_personalised_followups(context.bot, message, subscribers)
     return ConversationHandler.END
 
 
@@ -431,6 +456,8 @@ async def handle_review_callback(update: Update, context: ContextTypes.DEFAULT_T
         if failed_count:
             result += f" ({failed_count} failed)"
         await query.message.reply_text(result)
+
+        await _send_personalised_followups(context.bot, message, subscribers)
         return ConversationHandler.END
 
     elif query.data == "review_edit":
@@ -611,26 +638,20 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("What would you like to do?", reply_markup=_client_keyboard())
 
 
-SEED_BROADCAST = """Hi valued clients, here's a quick update on IP rider changes effective 1 April 2026!
+SEED_BROADCAST = """Hi valued clients,
+From 1 April 2026, new IP riders will cost less but cover less — your deductible and co-payment exposure increases.
 
-What's Changing
-• New IP riders will no longer cover the minimum IP deductible
-• Co-payment cap increases from $3,000 to $6,000/year
-• Applies to all new riders sold from 1 April 2026
+Here's what's changing:
+• New riders will no longer cover the minimum IP deductible
+• Co-payment cap doubles from $3,000 to $6,000/year
+• Premiums drop ~30%, saving private hospital holders ~$600/year and public hospital holders ~$200/year
 
-The Good News
-• New rider premiums expected to be ~30% lower on average
-• Private hospital rider holders could save ~$600/year
-• Public hospital rider holders could save ~$200/year
+What this means for you:
+• Bought your rider before 26 Nov 2025 → you're fully protected, nothing changes
+• Bought or buying before 31 March 2026 → current benefits stay until renewal after April 2028
+• Buying after 1 April 2026 → new rules apply
 
-Your Current Rider
-• Bought before 26 Nov 2025 → no change, benefits intact
-• Bought now–31 March 2026 → must switch to compliant rider at renewal after April 2028
-
-What To Do
-Don't rush — existing coverage stays intact. Review your deductible and co-payment terms, and reach out if your rider is up for renewal soon.
-
-Message me if you have questions!"""
+Bottom line: No need to panic, but worth reviewing your coverage before renewal. Drop me a message if you'd like to go through your plan together."""
 
 
 async def post_init(application: Application):

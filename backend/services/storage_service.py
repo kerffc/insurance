@@ -90,6 +90,11 @@ def get_user_policy(chat_id: int) -> dict | None:
     return data.get(str(chat_id))
 
 
+def get_all_user_policies() -> dict[str, dict]:
+    data = read_json(USER_POLICIES_FILE)
+    return data if isinstance(data, dict) else {}
+
+
 def list_sessions() -> list[dict]:
     """List all sessions (metadata only, no full client lists)."""
     sessions = []
