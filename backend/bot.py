@@ -678,6 +678,21 @@ What this means for you:
 
 Bottom line: No need to panic, but worth reviewing your coverage before renewal. Drop me a message if you'd like to go through your plan together."""
 
+SEED_BROADCAST_2 = """Hi valued clients,
+MediShield Life premiums are being revised upward from 1 April 2026 to keep pace with rising medical costs.
+
+What's Changing
+• Premiums rise by 35–40% across most age bands — e.g. age 41–45 goes from $465 to ~$640/year
+• The Annual Claims Limit increases from $150,000 to $200,000 per year
+• MAS requires all insurers to notify policyholders at least 30 days before renewal
+
+Your Current Policy
+• On standard MediShield Life (no IP) → premium rises apply; check your CPF statement for exact amount
+• With an Integrated Shield Plan → IP insurer will notify you separately; Medisave can still offset most of the increase
+
+What To Do
+No action needed unless you want to upgrade your IP coverage — Medisave auto-pays MediShield Life premiums. Message me if you'd like to review whether your current plan still fits your needs!"""
+
 
 async def post_init(application: Application):
     """Set bot commands and schedule daily digest."""
@@ -692,13 +707,19 @@ async def post_init(application: Application):
     except Exception as e:
         logger.error("Failed to set bot commands: %s", e)
 
-    # Seed a default broadcast if none exist so /latest always has content
-    if not get_broadcasts():
-        msg = SEED_BROADCAST
-        if AGENT_SIGNOFF:
-            msg += f"\n\n{AGENT_SIGNOFF}"
-        save_broadcast(msg, sent_to=0, source_url="https://www.moh.gov.sg/newsroom/new-requirements-for-integrated-shield-plan-riders-to-strengthen-sustainability-of-private-health-insurance-and-address-rising-healthcare-costs/")
-        logger.info("Seeded initial broadcast (IP rider changes April 2026)")
+    # Seed default broadcasts if fewer than 2 exist so /latest always has content
+    existing = get_broadcasts()
+    if len(existing) < 2:
+        seeds = [
+            (SEED_BROADCAST, "https://www.moh.gov.sg/newsroom/new-requirements-for-integrated-shield-plan-riders-to-strengthen-sustainability-of-private-health-insurance-and-address-rising-healthcare-costs/"),
+            (SEED_BROADCAST_2, "https://www.cpf.gov.sg/member/healthcare-financing/medishield-life"),
+        ]
+        for seed_msg, seed_url in seeds[len(existing):]:
+            msg = seed_msg
+            if AGENT_SIGNOFF:
+                msg += f"\n\n{AGENT_SIGNOFF}"
+            save_broadcast(msg, sent_to=0, source_url=seed_url)
+        logger.info("Seeded %d broadcast(s)", 2 - len(existing))
 
     for hour, minute in DIGEST_TIMES:
         t = dt_time(hour=hour, minute=minute, tzinfo=SGT)
