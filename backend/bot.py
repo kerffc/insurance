@@ -28,12 +28,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -120,7 +121,16 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
             sent_count = 0
             for sub in subscribers:
                 try:
-                    await context.bot.send_message(chat_id=sub["chat_id"], text=summary)
+                    # Telegram 4096-char limit — split if needed
+                    msg = summary
+                    while len(msg) > 4096:
+                        split_at = msg.rfind("\n", 0, 4096)
+                        if split_at == -1:
+                            split_at = 4096
+                        await context.bot.send_message(chat_id=sub["chat_id"], text=msg[:split_at])
+                        msg = msg[split_at:].lstrip("\n")
+                    if msg:
+                        await context.bot.send_message(chat_id=sub["chat_id"], text=msg)
                     sent_count += 1
                 except Exception as e:
                     logger.warning("Failed to send to %s: %s", sub["chat_id"], e)
@@ -390,6 +400,60 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show recent updates with clickable buttons."""
+    broadcasts = get_broadcasts()
+    if not broadcasts:
+        await update.message.reply_text("No updates yet. Stay tuned!")
+        return
+
+    recent = broadcasts[-5:]  # last 5
+    recent.reverse()  # newest first
+
+    buttons = []
+    for b in recent:
+        date = b["sent_at"][:10]
+        preview = b["full_message"].split("\n")[0][:40]
+        buttons.append([InlineKeyboardButton(
+            f"{date} — {preview}...",
+            callback_data=f"read_{b['id']}"
+        )])
+
+    await update.message.reply_text(
+        "Latest updates — tap to read:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def handle_read_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send full broadcast message when user taps a button."""
+    query = update.callback_query
+    await query.answer()
+
+    if not query.data.startswith("read_"):
+        return
+
+    broadcast_id = int(query.data.replace("read_", ""))
+    broadcasts = get_broadcasts()
+    broadcast = next((b for b in broadcasts if b["id"] == broadcast_id), None)
+
+    if not broadcast:
+        await query.message.reply_text("Update not found.")
+        return
+
+    text = broadcast["full_message"]
+    # Telegram has a 4096-char message limit; split if needed
+    while len(text) > 4096:
+        # Try to split at a newline near the limit
+        split_at = text.rfind("\n", 0, 4096)
+        if split_at == -1:
+            split_at = 4096
+        await query.message.reply_text(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    if text:
+        await query.message.reply_text(text)
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show help."""
     is_adm = is_admin(update.effective_chat.id)
@@ -397,6 +461,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Insurance Update Bot\n\n"
         "/start — Subscribe to daily insurance updates\n"
         "/stop — Unsubscribe\n"
+        "/latest — Read recent updates\n"
         "/help — Show this help\n"
     )
     if is_adm:
@@ -413,15 +478,31 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application):
     """Set bot commands and schedule daily digest."""
-    await application.bot.set_my_commands([
-        BotCommand("start", "Subscribe to daily insurance updates"),
-        BotCommand("stop", "Unsubscribe from updates"),
-        BotCommand("help", "Show available commands"),
-    ])
+    try:
+        await application.bot.set_my_commands([
+            BotCommand("start", "Subscribe to daily insurance updates"),
+            BotCommand("stop", "Unsubscribe from updates"),
+            BotCommand("latest", "Read recent updates"),
+            BotCommand("help", "Show available commands"),
+        ])
+    except Exception as e:
+        logger.error("Failed to set bot commands: %s", e)
 
     digest_time = dt_time(hour=DAILY_HOUR, minute=DAILY_MINUTE, tzinfo=SGT)
     application.job_queue.run_daily(daily_digest, time=digest_time, name="daily_digest")
     logger.info("Daily digest scheduled for %02d:%02d SGT", DAILY_HOUR, DAILY_MINUTE)
+
+    # Notify admins that bot started and digest is scheduled
+    subs = get_active_subscribers()
+    for admin_id in ADMIN_CHAT_IDS:
+        try:
+            await application.bot.send_message(
+                admin_id,
+                f"Bot started. Daily digest scheduled for {DAILY_HOUR:02d}:{DAILY_MINUTE:02d} SGT.\n"
+                f"Active subscribers: {len(subs)}",
+            )
+        except Exception as e:
+            logger.error("Failed to notify admin %s: %s", admin_id, e)
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -442,6 +523,14 @@ def start_health_server():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     logger.info("Health check server on port %d", port)
+
+
+async def cancel_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel and end the conversation properly."""
+    chat_id = update.effective_chat.id
+    _pending_messages.pop(chat_id, None)
+    await update.message.reply_text("Discarded.")
+    return ConversationHandler.END
 
 
 def main():
@@ -473,17 +562,19 @@ def main():
             ],
         },
         fallbacks=[
-            CommandHandler("cancel", lambda u, c: u.message.reply_text("Discarded.")),
+            CommandHandler("cancel", cancel_fallback),
         ],
     )
 
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stop", cmd_stop))
+    app.add_handler(CommandHandler("latest", cmd_latest))
     app.add_handler(CommandHandler("daily", cmd_daily))
     app.add_handler(CommandHandler("subscribers", cmd_subscribers))
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CallbackQueryHandler(handle_read_callback, pattern=r"^read_\d+$"))
 
     logger.info("Bot starting... Daily digest at %02d:%02d SGT", DAILY_HOUR, DAILY_MINUTE)
     app.run_polling()
