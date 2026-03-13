@@ -170,7 +170,7 @@ def fetch_diagram_image(summary: str) -> bytes | None:
     try:
         prompt = generate_diagram_prompt(summary)
         logger.info("Diagram prompt: %s", prompt)
-        encoded = urllib.parse.quote(prompt)
+        encoded = urllib.parse.quote(prompt, safe="")
         url = f"https://image.pollinations.ai/prompt/{encoded}?width=800&height=500&model=flux&nologo=true"
         resp = httpx.get(url, timeout=60, follow_redirects=True)
         resp.raise_for_status()

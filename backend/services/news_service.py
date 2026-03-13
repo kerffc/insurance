@@ -29,6 +29,12 @@ NEWS_SOURCES = [
     # Straits Times Singapore insurance and financial policy
     "https://news.google.com/rss/search?q=straits+times+singapore+insurance+premium+rider&hl=en-SG&gl=SG&ceid=SG:en",
     "https://news.google.com/rss/search?q=singapore+lasting+power+attorney+LPA+CPF+insurance&hl=en-SG&gl=SG&ceid=SG:en",
+    # CNA and Business Times broader coverage
+    "https://news.google.com/rss/search?q=CNA+singapore+insurance+healthcare+medisave&hl=en-SG&gl=SG&ceid=SG:en",
+    "https://news.google.com/rss/search?q=business+times+singapore+insurance+premium+regulation&hl=en-SG&gl=SG&ceid=SG:en",
+    # CPF and retirement planning
+    "https://news.google.com/rss/search?q=singapore+CPF+retirement+savings+payout+changes&hl=en-SG&gl=SG&ceid=SG:en",
+    "https://news.google.com/rss/search?q=singapore+medisave+hospitalisation+claims+limits&hl=en-SG&gl=SG&ceid=SG:en",
 ]
 
 HEADERS = {
@@ -123,8 +129,8 @@ def fetch_new_articles() -> list[dict]:
         if a["url"] not in unique:
             unique[a["url"]] = a
 
-    # Check relevance (limit to 10 to control API costs)
-    candidates = list(unique.values())[:10]
+    # Check relevance (limit to 12 to control API costs)
+    candidates = list(unique.values())[:12]
     relevant = []
     new_urls = []
 

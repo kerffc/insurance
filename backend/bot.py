@@ -137,6 +137,22 @@ def _plan_skip_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
+def _split_message(text: str, max_len: int = 4096) -> list[str]:
+    """Split a long message at newlines to fit Telegram's 4096-char limit."""
+    if len(text) <= max_len:
+        return [text]
+    parts = []
+    while len(text) > max_len:
+        split_at = text.rfind("\n", 0, max_len)
+        if split_at == -1:
+            split_at = max_len
+        parts.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    if text:
+        parts.append(text)
+    return parts
+
+
 async def _broadcast_to_subscribers(bot, message: str, subscribers: list[dict], image_bytes: bytes | None = None) -> tuple[int, int]:
     """Send message (and optional image) to all subscribers. Returns (sent_count, failed_count)."""
     sent_count = 0
@@ -152,15 +168,8 @@ async def _broadcast_to_subscribers(bot, message: str, subscribers: list[dict], 
                     )
                 except Exception as img_err:
                     logger.warning("Photo send failed for %s: %s", sub["chat_id"], img_err)
-            msg = message
-            while len(msg) > 4096:
-                split_at = msg.rfind("\n", 0, 4096)
-                if split_at == -1:
-                    split_at = 4096
-                await bot.send_message(chat_id=sub["chat_id"], text=msg[:split_at])
-                msg = msg[split_at:].lstrip("\n")
-            if msg:
-                await bot.send_message(chat_id=sub["chat_id"], text=msg)
+            for chunk in _split_message(message):
+                await bot.send_message(chat_id=sub["chat_id"], text=chunk)
             sent_count += 1
         except Exception as e:
             logger.warning("Failed to send to %s: %s", sub["chat_id"], e)
@@ -185,7 +194,7 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Fetch new relevant articles
-    articles = fetch_new_articles()
+    articles = await asyncio.to_thread(fetch_new_articles)
     if not articles:
         logger.info("No new relevant articles found today.")
         for admin_id in ADMIN_CHAT_IDS:
@@ -200,8 +209,8 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
     # Summarise each article and broadcast (cap at 3 per day)
     for article in articles[:3]:
         try:
-            article_text = fetch_article_text(article["url"])
-            summary = summarise_article(article_text)
+            article_text = await asyncio.to_thread(fetch_article_text, article["url"])
+            summary = await asyncio.to_thread(summarise_article, article_text)
 
             if AGENT_SIGNOFF:
                 summary += f"\n\n{AGENT_SIGNOFF}"
@@ -285,7 +294,7 @@ async def cmd_summarise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Fetching and summarising... please wait.")
 
     try:
-        result = summarise_from_url(url, agent_notes=after_url)
+        result = await asyncio.to_thread(summarise_from_url, url, after_url)
         summary = result["summary"]
         if AGENT_SIGNOFF:
             summary += f"\n\n{AGENT_SIGNOFF}"
@@ -315,7 +324,7 @@ async def cmd_paste(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Summarising... please wait.")
 
     try:
-        summary = summarise_article(text)
+        summary = await asyncio.to_thread(summarise_article, text)
         if AGENT_SIGNOFF:
             summary += f"\n\n{AGENT_SIGNOFF}"
 
@@ -389,7 +398,8 @@ async def _send_personalised_followups(bot, broadcast_message: str, subscribers:
         if chat_id_str not in sub_ids:
             continue
         try:
-            advice = advise_for_policy(
+            advice = await asyncio.to_thread(
+                advise_for_policy,
                 policy["insurer"],
                 policy["policy_type"],
                 policy.get("plan_name") or None,
@@ -499,14 +509,8 @@ async def handle_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             text = b["full_message"]
             if b.get("source_url"):
                 text += f"\n\n{b['source_url']}"
-            while len(text) > 4096:
-                split_at = text.rfind("\n", 0, 4096)
-                if split_at == -1:
-                    split_at = 4096
-                await query.message.reply_text(text[:split_at])
-                text = text[split_at:].lstrip("\n")
-            if text:
-                await query.message.reply_text(text)
+            for chunk in _split_message(text):
+                await query.message.reply_text(chunk)
 
     elif query.data == "nav_stop":
         removed = remove_subscriber(chat_id)
@@ -581,7 +585,7 @@ async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # No broadcasts yet — fetch live news and generate a summary on the spot
         await update.message.reply_text("Fetching the latest insurance news for you...")
         try:
-            articles = fetch_new_articles()
+            articles = await asyncio.to_thread(fetch_new_articles)
             if not articles:
                 await update.message.reply_text(
                     "No recent Singapore insurance news found right now. Check back later!"
@@ -589,20 +593,12 @@ async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             # Summarise the first article and send it directly
             article = articles[0]
-            article_text = fetch_article_text(article["url"])
-            summary = summarise_article(article_text)
+            article_text = await asyncio.to_thread(fetch_article_text, article["url"])
+            summary = await asyncio.to_thread(summarise_article, article_text)
             if AGENT_SIGNOFF:
                 summary += f"\n\n{AGENT_SIGNOFF}"
-            # Send (with message splitting for long summaries)
-            text = summary
-            while len(text) > 4096:
-                split_at = text.rfind("\n", 0, 4096)
-                if split_at == -1:
-                    split_at = 4096
-                await update.message.reply_text(text[:split_at])
-                text = text[split_at:].lstrip("\n")
-            if text:
-                await update.message.reply_text(text)
+            for chunk in _split_message(summary):
+                await update.message.reply_text(chunk)
             # Save as a broadcast so future /latest calls show it
             save_broadcast(summary, sent_to=0, source_url=article["url"])
         except Exception as e:
@@ -619,15 +615,8 @@ async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = b["full_message"]
         if b.get("source_url"):
             text += f"\n\n{b['source_url']}"
-        while len(text) > 4096:
-            split_at = text.rfind("\n", 0, 4096)
-            if split_at == -1:
-                split_at = 4096
-            await update.message.reply_text(text[:split_at])
-            text = text[split_at:].lstrip("\n")
-        if text:
-            await update.message.reply_text(text)
-
+        for chunk in _split_message(text):
+            await update.message.reply_text(chunk)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -800,7 +789,7 @@ async def _generate_advice(chat_id: int, plan_name: str | None, reply_func) -> N
     recent_messages = [b["full_message"] for b in broadcasts[-3:]] if broadcasts else []
 
     try:
-        advice = advise_for_policy(insurer, policy_type, plan_name, recent_messages)
+        advice = await asyncio.to_thread(advise_for_policy, insurer, policy_type, plan_name, recent_messages)
         await reply_func(advice, reply_markup=_client_keyboard())
     except Exception as e:
         logger.error("advise_for_policy failed: %s", e)
@@ -832,7 +821,7 @@ async def handle_client_question(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
     recent = [b["full_message"] for b in broadcasts[-5:]]
-    answer = answer_question(question, recent)
+    answer = await asyncio.to_thread(answer_question, question, recent)
     await update.message.reply_text(answer, reply_markup=_client_keyboard())
 
 
@@ -868,6 +857,7 @@ def main():
         fallbacks=[
             CommandHandler("cancel", cancel_fallback),
         ],
+        conversation_timeout=600,  # 10 min — cleans up abandoned review sessions
     )
 
     policy_conv_handler = ConversationHandler(
@@ -885,6 +875,7 @@ def main():
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_fallback)],
+        conversation_timeout=600,
     )
 
     app.add_handler(conv_handler)

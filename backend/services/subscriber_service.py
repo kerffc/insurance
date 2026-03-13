@@ -1,6 +1,7 @@
 """Subscriber management — tracks Telegram users who subscribe to updates."""
 
 import logging
+import threading
 from datetime import datetime, timezone
 
 from services.storage_service import read_json, write_json
@@ -12,6 +13,9 @@ logger = logging.getLogger(__name__)
 SUBSCRIBERS_FILE = os.path.join(DATA_DIR, "subscribers.json")
 BROADCASTS_FILE = os.path.join(DATA_DIR, "broadcasts.json")
 
+# Protects the full read-modify-write cycle for subscriber mutations
+_sub_lock = threading.Lock()
+
 
 def get_subscribers() -> list[dict]:
     return read_json(SUBSCRIBERS_FILE) or []
@@ -19,28 +23,30 @@ def get_subscribers() -> list[dict]:
 
 def add_subscriber(chat_id: int, first_name: str = "", username: str = "") -> bool:
     """Add subscriber. Returns True if new, False if already exists."""
-    subs = get_subscribers()
-    if any(s["chat_id"] == chat_id for s in subs):
-        return False
-    subs.append({
-        "chat_id": chat_id,
-        "first_name": first_name,
-        "username": username,
-        "subscribed_at": datetime.now(timezone.utc).isoformat(),
-        "active": True,
-    })
-    write_json(SUBSCRIBERS_FILE, subs)
-    return True
+    with _sub_lock:
+        subs = read_json(SUBSCRIBERS_FILE) or []
+        if any(s["chat_id"] == chat_id for s in subs):
+            return False
+        subs.append({
+            "chat_id": chat_id,
+            "first_name": first_name,
+            "username": username,
+            "subscribed_at": datetime.now(timezone.utc).isoformat(),
+            "active": True,
+        })
+        write_json(SUBSCRIBERS_FILE, subs)
+        return True
 
 
 def remove_subscriber(chat_id: int) -> bool:
     """Remove subscriber. Returns True if found and removed."""
-    subs = get_subscribers()
-    new_subs = [s for s in subs if s["chat_id"] != chat_id]
-    if len(new_subs) == len(subs):
-        return False
-    write_json(SUBSCRIBERS_FILE, new_subs)
-    return True
+    with _sub_lock:
+        subs = read_json(SUBSCRIBERS_FILE) or []
+        new_subs = [s for s in subs if s["chat_id"] != chat_id]
+        if len(new_subs) == len(subs):
+            return False
+        write_json(SUBSCRIBERS_FILE, new_subs)
+        return True
 
 
 def get_active_subscribers() -> list[dict]:
