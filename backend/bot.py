@@ -401,10 +401,41 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show recent updates with clickable buttons."""
+    """Show recent updates with clickable buttons. Fetches live news if no broadcasts exist."""
     broadcasts = get_broadcasts()
     if not broadcasts:
-        await update.message.reply_text("No updates yet. Stay tuned!")
+        # No broadcasts yet — fetch live news and generate a summary on the spot
+        await update.message.reply_text("Fetching the latest insurance news for you...")
+        try:
+            articles = fetch_new_articles()
+            if not articles:
+                await update.message.reply_text(
+                    "No recent Singapore insurance news found right now. Check back later!"
+                )
+                return
+            # Summarise the first article and send it directly
+            article = articles[0]
+            article_text = fetch_article_text(article["url"])
+            summary = summarise_article(article_text)
+            if AGENT_SIGNOFF:
+                summary += f"\n\n{AGENT_SIGNOFF}"
+            # Send (with message splitting for long summaries)
+            text = summary
+            while len(text) > 4096:
+                split_at = text.rfind("\n", 0, 4096)
+                if split_at == -1:
+                    split_at = 4096
+                await update.message.reply_text(text[:split_at])
+                text = text[split_at:].lstrip("\n")
+            if text:
+                await update.message.reply_text(text)
+            # Save as a broadcast so future /latest calls show it
+            save_broadcast(summary, sent_to=0, source_url=article["url"])
+        except Exception as e:
+            logger.error("Failed to fetch live news for /latest: %s", e)
+            await update.message.reply_text(
+                "Couldn't fetch news right now. Try again later!"
+            )
         return
 
     recent = broadcasts[-5:]  # last 5
@@ -476,6 +507,45 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
+SEED_BROADCAST = """Hi valued clients, here's an important update on upcoming changes to Integrated Shield Plan (IP) riders!
+
+1️⃣ What's Changing (Effective 1 April 2026)
+
+• New IP riders will no longer cover the minimum IP deductible — this is the first amount you pay before insurance kicks in
+• The co-payment cap is increasing from $3,000/year to $6,000/year minimum
+• These changes apply to ALL new riders sold from 1 April 2026
+
+2️⃣ Why These Changes?
+
+• MOH data shows IP policyholders with riders are 1.4x more likely to claim, with 1.4x larger average claims
+• Rising bill sizes and claims have been driving up premiums, especially for riders
+• The changes aim to make private health insurance more sustainable and affordable long-term
+
+3️⃣ Impact on Premiums
+
+• Good news — new rider premiums expected to be ~30% lower on average
+• Private hospital IP rider holders could save ~$600/year
+• Public hospital rider holders could save ~$200/year
+• Older policyholders will enjoy greater premium savings
+
+4️⃣ What About Your Current Rider?
+
+• If you bought your rider before 26 Nov 2025: Your current contract stays valid. Benefits do NOT automatically change on 1 April 2026
+• If you buy a rider between now and 31 March 2026: You'll need to switch to a new-compliant rider by your next renewal after 1 April 2028
+• Existing riders that fully cover deductibles will continue to operate as they do today
+
+5️⃣ What Should You Do Now?
+
+• Don't rush to make changes — your existing coverage remains intact
+• Review your current IP and rider coverage to understand your deductible and co-payment terms
+• Consider whether the new lower-premium riders might suit your needs better
+• Reach out to discuss your specific situation — especially if your rider is up for renewal soon
+
+This is a significant shift in how IP riders work in Singapore. The key takeaway: existing policyholders are protected, and new riders will be more affordable but with higher out-of-pocket costs.
+
+Feel free to reach out if you have any questions about how this affects your specific policy!"""
+
+
 async def post_init(application: Application):
     """Set bot commands and schedule daily digest."""
     try:
@@ -487,6 +557,14 @@ async def post_init(application: Application):
         ])
     except Exception as e:
         logger.error("Failed to set bot commands: %s", e)
+
+    # Seed a default broadcast if none exist so /latest always has content
+    if not get_broadcasts():
+        msg = SEED_BROADCAST
+        if AGENT_SIGNOFF:
+            msg += f"\n\n{AGENT_SIGNOFF}"
+        save_broadcast(msg, sent_to=0, source_url="https://www.moh.gov.sg/newsroom/new-requirements-for-integrated-shield-plan-riders-to-strengthen-sustainability-of-private-health-insurance-and-address-rising-healthcare-costs/")
+        logger.info("Seeded initial broadcast (IP rider changes April 2026)")
 
     digest_time = dt_time(hour=DAILY_HOUR, minute=DAILY_MINUTE, tzinfo=SGT)
     application.job_queue.run_daily(daily_digest, time=digest_time, name="daily_digest")
