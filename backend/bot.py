@@ -143,7 +143,14 @@ async def _broadcast_to_subscribers(bot, message: str, subscribers: list[dict], 
     for sub in subscribers:
         try:
             if image_bytes:
-                await bot.send_photo(chat_id=sub["chat_id"], photo=io.BytesIO(image_bytes))
+                try:
+                    await bot.send_photo(
+                        chat_id=sub["chat_id"],
+                        photo=io.BytesIO(image_bytes),
+                        filename="diagram.jpg",
+                    )
+                except Exception as img_err:
+                    logger.warning("Photo send failed for %s: %s", sub["chat_id"], img_err)
             msg = message
             while len(msg) > 4096:
                 split_at = msg.rfind("\n", 0, 4096)
@@ -411,6 +418,7 @@ async def do_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Broadcasting to {len(subscribers)} subscribers...")
 
     image_bytes = fetch_diagram_image(message)
+    logger.info("Diagram image: %s bytes", len(image_bytes) if image_bytes else "None")
     sent_count, failed_count = await _broadcast_to_subscribers(context.bot, message, subscribers, image_bytes)
 
     save_broadcast(message, sent_to=sent_count, source_url=pending.get("source_url", ""))
