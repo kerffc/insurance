@@ -23,7 +23,7 @@ import logging
 import os
 import re
 import threading
-from datetime import time as dt_time, timezone, timedelta
+from datetime import datetime, time as dt_time, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from dotenv import load_dotenv
@@ -202,10 +202,20 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Fetch new relevant articles
-    articles = await asyncio.to_thread(fetch_new_articles)
+    articles, unseen_count, checked_count = await asyncio.to_thread(fetch_new_articles)
     if not articles:
         logger.info("Daily digest: no new relevant articles this run.")
-        return  # No admin notification — this runs 3× per day, silence is fine
+        now_sgt = datetime.now(SGT).strftime("%H:%M SGT")
+        for admin_id in ADMIN_CHAT_IDS:
+            try:
+                await context.bot.send_message(
+                    admin_id,
+                    f"Daily digest ({now_sgt}): no new relevant articles.\n"
+                    f"{unseen_count} unseen URLs found, {checked_count} checked for relevance."
+                )
+            except Exception:
+                pass
+        return
 
     logger.info("Found %d new relevant articles", len(articles))
 
@@ -824,7 +834,6 @@ async def handle_policy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def _generate_advice(chat_id: int, plan_name: str | None, reply_func) -> None:
     """Save policy, cross-reference broadcasts, return personalised advice."""
-    from datetime import datetime
     store = _policy_store.pop(chat_id, {})
     insurer = store.get("insurer", "Unknown")
     policy_type = store.get("policy_type", "Unknown")

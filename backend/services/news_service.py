@@ -145,4 +145,4 @@ def fetch_new_articles() -> list[dict]:
 
     logger.info("Daily digest: %d total unseen, %d candidates checked, %d relevant",
                 len(unique), len(candidates), len(relevant))
-    return relevant
+    return relevant, len(unique), len(candidates)
