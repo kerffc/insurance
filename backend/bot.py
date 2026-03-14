@@ -23,7 +23,7 @@ import logging
 import os
 import re
 import threading
-from datetime import time as dt_time, timezone, timedelta
+from datetime import datetime, time as dt_time, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from dotenv import load_dotenv
@@ -202,10 +202,20 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Fetch new relevant articles
-    articles = await asyncio.to_thread(fetch_new_articles)
+    articles, unseen_count, checked_count = await asyncio.to_thread(fetch_new_articles)
     if not articles:
         logger.info("Daily digest: no new relevant articles this run.")
-        return  # No admin notification — this runs 3× per day, silence is fine
+        now_sgt = datetime.now(SGT).strftime("%H:%M SGT")
+        for admin_id in ADMIN_CHAT_IDS:
+            try:
+                await context.bot.send_message(
+                    admin_id,
+                    f"Daily digest ({now_sgt}): no new relevant articles.\n"
+                    f"{unseen_count} unseen URLs found, {checked_count} checked for relevance."
+                )
+            except Exception:
+                pass
+        return
 
     logger.info("Found %d new relevant articles", len(articles))
 
@@ -707,19 +717,23 @@ async def post_init(application: Application):
     except Exception as e:
         logger.error("Failed to set bot commands: %s", e)
 
-    # Seed default broadcasts if fewer than 2 exist so /latest always has content
+    # Seed default broadcasts by source URL so they're added even on existing installs
     existing = get_broadcasts()
-    if len(existing) < 2:
-        seeds = [
-            (SEED_BROADCAST, "https://www.moh.gov.sg/newsroom/new-requirements-for-integrated-shield-plan-riders-to-strengthen-sustainability-of-private-health-insurance-and-address-rising-healthcare-costs/"),
-            (SEED_BROADCAST_2, "https://www.cpf.gov.sg/member/healthcare-financing/medishield-life"),
-        ]
-        for seed_msg, seed_url in seeds[len(existing):]:
+    existing_urls = {b.get("source_url", "") for b in existing}
+    seeds = [
+        (SEED_BROADCAST, "https://www.moh.gov.sg/newsroom/new-requirements-for-integrated-shield-plan-riders-to-strengthen-sustainability-of-private-health-insurance-and-address-rising-healthcare-costs/"),
+        (SEED_BROADCAST_2, "https://www.cpf.gov.sg/member/healthcare-financing/medishield-life"),
+    ]
+    added = 0
+    for seed_msg, seed_url in seeds:
+        if seed_url not in existing_urls:
             msg = seed_msg
             if AGENT_SIGNOFF:
                 msg += f"\n\n{AGENT_SIGNOFF}"
             save_broadcast(msg, sent_to=0, source_url=seed_url)
-        logger.info("Seeded %d broadcast(s)", 2 - len(existing))
+            added += 1
+    if added:
+        logger.info("Seeded %d new broadcast(s)", added)
 
     for hour, minute in DIGEST_TIMES:
         t = dt_time(hour=hour, minute=minute, tzinfo=SGT)
@@ -820,7 +834,6 @@ async def handle_policy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def _generate_advice(chat_id: int, plan_name: str | None, reply_func) -> None:
     """Save policy, cross-reference broadcasts, return personalised advice."""
-    from datetime import datetime
     store = _policy_store.pop(chat_id, {})
     insurer = store.get("insurer", "Unknown")
     policy_type = store.get("policy_type", "Unknown")
