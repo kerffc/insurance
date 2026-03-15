@@ -71,8 +71,8 @@ for _t in _DIGEST_TIMES_RAW.split(","):
         _h, _m = _t.split(":")
         DIGEST_TIMES.append((int(_h), int(_m)))
 if not DIGEST_TIMES:
-    # Legacy single-time fallback
-    DIGEST_TIMES = [(int(os.environ.get("DAILY_HOUR", "9")), int(os.environ.get("DAILY_MINUTE", "0")))]
+    # Default to 9am, 12pm, 4pm SGT if DIGEST_TIMES not configured
+    DIGEST_TIMES = [(9, 0), (12, 0), (16, 0)]
 
 # Agent sign-off (appended to every broadcast)
 AGENT_SIGNOFF = os.environ.get("AGENT_SIGNOFF", "")
@@ -701,6 +701,22 @@ Your Current Policy
 What To Do
 No action needed unless you want to upgrade your IP coverage — Medisave auto-pays MediShield Life premiums. Message me if you'd like to review whether your current plan still fits your needs!"""
 
+SEED_BROADCAST_3 = """Hi valued clients,
+MAS has announced updates to CareShield Life contribution rates and benefit amounts effective 2026, as part of the scheme's long-term sustainability review.
+
+What's Changing
+• Monthly payouts for severe disability increase from $600 to $700/month for new claimants from 2026
+• Annual premiums adjusted upward by ~5–8% depending on your age band
+• Supplement plan riders from private insurers (e.g. CareShield Life supplements from AIA, Great Eastern, Aviva) are unaffected — benefits stack on top
+
+Who's Affected
+• Born 1980 or later and currently contributing → premium adjustment applies at next renewal
+• Already claiming → monthly benefit increase applies automatically from Jan 2026
+• Born before 1980 and opted in voluntarily → same adjustments apply
+
+What To Do
+No immediate action needed — CPF handles contributions automatically. If you have a private CareShield Life supplement, check with your insurer that coverage is still adequate. Message me if you'd like to review your disability income protection!"""
+
 
 async def post_init(application: Application):
     """Set bot commands and schedule daily digest."""
@@ -721,6 +737,7 @@ async def post_init(application: Application):
     seeds = [
         (SEED_BROADCAST, "https://www.moh.gov.sg/newsroom/new-requirements-for-integrated-shield-plan-riders-to-strengthen-sustainability-of-private-health-insurance-and-address-rising-healthcare-costs/"),
         (SEED_BROADCAST_2, "https://www.cpf.gov.sg/member/healthcare-financing/medishield-life"),
+        (SEED_BROADCAST_3, "https://www.careshieldlife.gov.sg/careshield-life/about-careshield-life.html"),
     ]
     added = 0
     for seed_msg, seed_url in seeds:
