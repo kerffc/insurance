@@ -517,8 +517,7 @@ async def handle_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if not broadcasts:
             await query.message.reply_text("No updates yet. Check back later!")
             return
-        recent = broadcasts[-3:]
-        recent.reverse()
+        recent = broadcasts[-3:]  # oldest first
         for b in recent:
             text = b["full_message"]
             if b.get("source_url"):
@@ -645,8 +644,7 @@ async def cmd_latest(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    recent = broadcasts[-3:]  # last 3
-    recent.reverse()  # newest first
+    recent = broadcasts[-3:]  # last 3, oldest first
 
     for b in recent:
         text = b["full_message"]
