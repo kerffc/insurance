@@ -42,17 +42,18 @@ HEADERS = {
 }
 
 RELEVANCE_SYSTEM = """You are a Singapore insurance news filter. Given an article title and snippet, \
-determine if it is RELEVANT to Singapore insurance policyholders — i.e., contains info about:
-- Insurance policy changes, premium changes, coverage changes
-- MAS / MOH / MSF regulatory updates affecting insurance or financial planning
-- Health insurance, IP riders, MediShield Life changes
-- CPF changes related to insurance or retirement
-- Insurer announcements (AIA, Prudential, Great Eastern, NTUC Income, etc.)
-- Healthcare cost changes affecting insurance
-- Lasting Power of Attorney (LPA), estate planning, or government schemes that affect financial/insurance planning
-- Government subsidies or fee changes relevant to Singaporeans' financial wellbeing
+rate its relevance to Singapore insurance policyholders:
 
-Reply with ONLY "YES" or "NO"."""
+YES — Directly relevant: insurance policy/premium/coverage changes, MAS/MOH/MSF regulatory updates, \
+IP riders, MediShield Life, CPF insurance changes, insurer announcements (AIA, Prudential, Great Eastern, \
+NTUC Income, Manulife, AXA, FWD, Singlife etc.), healthcare costs affecting insurance.
+
+MAYBE — Broadly useful: Singapore healthcare news, CPF/retirement planning, government financial schemes, \
+hospital bills, Medisave usage, personal finance topics a policyholder would care about.
+
+NO — Not relevant: overseas news, unrelated business/politics, general Singapore news with no insurance angle.
+
+Reply with ONLY "YES", "MAYBE", or "NO"."""
 
 
 def get_seen_urls() -> set[str]:
@@ -96,8 +97,8 @@ def fetch_rss_articles(source_url: str) -> list[dict]:
     return articles
 
 
-def check_relevance(title: str, description: str) -> bool:
-    """Use Claude to check if an article is relevant to SG insurance."""
+def check_relevance(title: str, description: str) -> str:
+    """Use Claude to score article relevance. Returns 'YES', 'MAYBE', or 'NO'."""
     try:
         response = anthropic_create(
             model=HAIKU_MODEL,
@@ -105,10 +106,11 @@ def check_relevance(title: str, description: str) -> bool:
             system=RELEVANCE_SYSTEM,
             messages=[{"role": "user", "content": f"Title: {title}\nSnippet: {description}"}],
         )
-        return response.content[0].text.strip().upper() == "YES"
+        score = response.content[0].text.strip().upper()
+        return score if score in ("YES", "MAYBE") else "NO"
     except Exception as e:
         logger.warning("Relevance check failed: %s", e)
-        return False
+        return "NO"
 
 
 def fetch_new_articles() -> list[dict]:
@@ -134,15 +136,24 @@ def fetch_new_articles() -> list[dict]:
     relevant = []
     new_urls = []
 
+    maybes = []
     for a in candidates:
         new_urls.append(a["url"])
-        if check_relevance(a["title"], a["description"]):
+        score = check_relevance(a["title"], a["description"])
+        if score == "YES":
             relevant.append(a)
+        elif score == "MAYBE":
+            maybes.append(a)
+
+    # Fall back to MAYBE articles if nothing scored YES
+    if not relevant and maybes:
+        relevant = maybes[:1]
+        logger.info("No YES articles found — using best MAYBE fallback: %s", maybes[0]["title"][:60])
 
     # Mark all checked URLs as seen (even irrelevant ones)
     if new_urls:
         mark_urls_seen(new_urls)
 
-    logger.info("Daily digest: %d total unseen, %d candidates checked, %d relevant",
-                len(unique), len(candidates), len(relevant))
+    logger.info("Daily digest: %d total unseen, %d candidates checked, %d relevant (%d maybe)",
+                len(unique), len(candidates), len(relevant), len(maybes))
     return relevant, len(unique), len(candidates)
