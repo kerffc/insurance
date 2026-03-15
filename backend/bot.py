@@ -71,8 +71,8 @@ for _t in _DIGEST_TIMES_RAW.split(","):
         _h, _m = _t.split(":")
         DIGEST_TIMES.append((int(_h), int(_m)))
 if not DIGEST_TIMES:
-    # Legacy single-time fallback
-    DIGEST_TIMES = [(int(os.environ.get("DAILY_HOUR", "9")), int(os.environ.get("DAILY_MINUTE", "0")))]
+    # Default to 9am, 12pm, 4pm SGT if DIGEST_TIMES not configured
+    DIGEST_TIMES = [(9, 0), (12, 0), (16, 0)]
 
 # Agent sign-off (appended to every broadcast)
 AGENT_SIGNOFF = os.environ.get("AGENT_SIGNOFF", "")
